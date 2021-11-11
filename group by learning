@@ -1,0 +1,14 @@
+# 我的回答：问题在于，在selct中后面出现的字段必须为groupby中存在的或者是聚合函数
+#问题的网址为
+https://blog.csdn.net/weixin_49429575/article/details/116447767
+
+select
+a.dept_no
+,a.emp_no
+,max(b.salary) as maxSalary
+from dept_emp as a 
+join salaries as b
+on a.emp_no=b.emp_no
+group by dept_no
+order by dept_no
+
