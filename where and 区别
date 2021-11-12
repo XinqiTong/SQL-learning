@@ -1,0 +1,161 @@
+题目：查找所有员工自入职以来的薪水涨幅情况，给出员工编号emp_no以及其对应的薪水涨幅growth，并按照growth进行升序
+解题要领：构建现在的工资表和入职的工资表，然后做差
+隐含题意：现在对应的时间是to_date=‘9999-01-01’，入职则需要利用employees表的hire_date字段
+
+方法1：利用左外连接创建Scurrent表和Sstart表
+SELECT sCurrent.emp_no, (sCurrent.salary-sStart.salary) AS growth
+FROM (SELECT e.emp_no, s.salary
+FROM employees AS e
+LEFT JOIN salaries AS s
+ON e.emp_no=s.emp_no
+WHERE s.to_date='9999-01-01') AS sCurrent
+INNER JOIN (SELECT e.emp_no, s.salary
+FROM employees AS e
+LEFT JOIN salaries AS s
+ON e.emp_no=s.emp_no
+AND s.from_date=e.hire_date) AS sStart
+ON sCurrent.emp_no=sStart.emp_no
+ORDER BY growth ASC;
+
+注意：方法1中红色的WHERE不能改成AND(这个问题本质上是将过滤条件放在ON和WHERE是否一致的问题)
+当我们使用关联操作时，关联两张表或多张表来返回记录时，数据库就会生成一张临时表，最后将这张临时表返回给用户。以LEFT JOIN为例：在使用LEFT JOIN时，ON和WHERE的过滤条件的区别如下：
+ON条件是在生成临时表时使用的条件，它不管ON中的条件是否为真，都会返回左边表中的记录
+WHERE条件是在临时表已经生成后，对临时表进行的过滤条件。如果WHERE条件不为真的记录就会被过滤掉。
+由于LEFT JOIN(以及RIGHT JOIN，FULL JOIN)的特殊性，不管ON条件是否为真，数据库都会返回左侧(或右侧、左右两侧)表中的全部记录。由于INNER JOIN没有这样的特殊性，
+所以过滤条件放在ON中或WHERE中，其返回的结果是一样的。
+这是使用的是LEFT JOIN，而s.to_date=‘9999-01-01’是连接表之后需要进行的过滤条件，所以必须放在WHERE里面。
+参考资料：SQL中的ON和WHERE的区别：https://blog.csdn.net/liitdar/article/details/80817957
+补充：内层求工资表的时候，用的左外连接，是考虑有些新员工没有工资的实际情况。如果认为所有员工都有工资，则可以改成INNER JOIN。
+补充：因为内连接也可以改成查两表+WHERE的形式，所以代码也可以改成：
+SELECT sCurrent.emp_no, (sCurrent.salary-sStart.salary) AS growth
+FROM (SELECT e.emp_no, s.salary
+FROM employees AS e
+INNER JOIN salaries AS s
+ON e.emp_no=s.emp_no
+WHERE s.to_date='9999-01-01') AS sCurrent,
+(SELECT e.emp_no, s.salary
+FROM employees AS e
+INNER JOIN salaries AS s
+ON e.emp_no=s.emp_no
+AND s.from_date=e.hire_date) AS sStart
+WHERE sCurrent.emp_no=sStart.emp_no
+ORDER BY growth ASC;
+补充：工资表的构建甚至不需要用到employees表
+SELECT sCurrent.emp_no, (sCurrent.salary-sStart.salary) AS growth
+FROM (SELECT emp_no, salary
+FROM salaries
+WHERE to_date='9999-01-01') AS sCurrent,
+(SELECT s.emp_no, s.salary
+FROM salaries AS s
+WHERE s.from_date=(SELECT from_date
+FROM salaries
+WHERE emp_no=s.emp_no
+ORDER BY from_date ASC LIMIT 1)
+) AS sStart
+WHERE sCurrent.emp_no=sStart.emp_no
+ORDER BY growth ASC;
+疑惑：不知道为什么，改成下面这个样子，代码会错误，我想可能是测试数据有点问题。
+SELECT sCurrent.emp_no, (sCurrent.salary-sStart.salary) AS growth
+FROM (SELECT s.emp_no, s.salary
+FROM salaries AS s
+WHERE s.to_date=(SELECT to_date
+FROM salaries
+WHERE emp_no=s.emp_no
+ORDER BY to_date DESC LIMIT 1)
+) AS sCurrent,
+(SELECT s.emp_no, s.salary
+FROM salaries AS s
+WHERE s.from_date=(SELECT from_date
+FROM salaries
+WHERE emp_no=s.emp_no
+ORDER BY from_date ASC LIMIT 1)
+) AS sStart
+WHERE sCurrent.emp_no=sStart.emp_no
+ORDER BY growth ASC;
+
+方法2：连续内连接
+SELECT sCurrent.emp_no, (sCurrent.salary-sStart.salary) AS growth
+FROM (employees AS e
+INNER JOIN salaries AS sCurrent
+ON e.emp_no=sCurrent.emp_no
+AND sCurrent.to_date='9999-01-01'
+INNER JOIN salaries AS sStart
+ON e.emp_no=sStart.emp_no
+AND sStart.from_date=e.hire_date
+)
+ORDER BY growth ASC;
+注意：方法中标红的两个AND都不可以被替换成WHERE，即这两个AND都是ON意义下的，虽然在INNER JOIN中ON和WHERE的意义相同，
+但是在连续内连接中，不能出现WHERE(原因推测而只用ON的话，相当于只是生成临时表？)
+注意：这种写法并不常见，不是很建议
+
+错误示范：错误点：连续内连接不是这样写的。这样写第一个SELECT到WHERE查出来一个表和第二个表内连接，什么都没查出来(语法报错)
+SELECT sCurrent.emp_no, (sCurrent.salary-sStart.salary) AS growth
+FROM employees AS e
+INNER JOIN salaries AS sCurrent
+ON e.emp_no=sCurrent.emp_no
+WHERE sCurrent.to_date='9999-01-01'
+INNER JOIN salaries AS sStart
+ON e.emp_no=sStart.emp_no
+WHERE sStart.from_date=e.hire_date
+ORDER BY growth ASC;
+
+错误示范：错误点：在非相关子查询的情况下引用外部表
+SELECT a.emp_no, (b.salary - c.salary) AS growth
+FROM employees AS a,
+(SELECT emp_no, salary
+FROM salaries
+WHERE to_date ='9999-01-01') AS b,
+(SELECT emp_no, salary
+FROM salaries
+WHERE from_date =a.hire_date) AS c
+WHERE a.emp_no=b.emp_no
+AND a.emp_no=c.emp_no
+ORDER BY growth ASC;
+注意：要引用外部查询的表，多数情况下是在WHERE里面进行的相关子查询，或者SELECT子句里(可见23题方法2)
+补充：
+SQL相关子查询和非相关子查询：参考资料：https://blog.csdn.net/shiyong1949/article/details/80923083
+非相关子查询的执行不依赖与外部的查询：
+执行过程为：
+(1)：执行子查询：其结果不被显示，而是传递给外部查询，作为外部查询的条件使用。
+(2)：执行外部查询，并显示整个结果
+相关子查询的执行依赖于外部查询：多数情况下是子查询的WHERE子句中引用了外部查询的表。
+执行过程：
+(1)：从外层查询中取出一个元祖，将元祖相关的值传给内层查询。
+(2)：执行内层查询，得到子查询操作的值。
+(3)：外查询根据子查询返回的结果或者结果集得到满足条件的行
+(4)：然后外层查询取出下一个元祖重复做步骤1-3，直到外层的元祖全部处理完毕。
+总结：
+非相关子查询是独立于外部查询的子查询，子查询总共执行一次，执行完毕之后将值传递给外部查询。
+相关子查询的执行依赖于外部查询的数据，外部查询执行一行，子查询就执行一次。
+所以非相关子查询比相关子查询效率高。
+
+下面是我认为正确的利用子查询两种写法，虽然无法通过，但在mysql的部分测试中通过了？
+SELECT DISTINCT a.emp_no, (a.salary - b.salary) AS growth
+FROM salaries AS a, salaries AS b
+WHERE a.salary=(SELECT salary
+FROM salaries AS s
+WHERE s.emp_no=a.emp_no
+ORDER BY to_date DESC LIMIT 1)
+AND b.salary=(SELECT salary
+FROM salaries AS s
+WHERE s.emp_no=a.emp_no
+ORDER BY to_date ASC LIMIT 1)
+AND a.emp_no=b.emp_no
+ORDER BY growth ASC;
+在mysql和部分测试数据中的结果：
+
+SELECT DISTINCT emp_no,
+(SELECT salary
+FROM salaries
+WHERE emp_no=a.emp_no
+ORDER BY to_date DESC LIMIT 1)
+-
+(SELECT salary
+FROM salaries
+WHERE emp_no=a.emp_no
+ORDER BY to_date ASC LIMIT 1) AS growth
+FROM salaries as a
+ORDER BY growth;
+在mysql和部分测试数据中的结果：
+
+我认为是因为有些员工在employees表的hire_date不等于他在salaries表中的from_date。
